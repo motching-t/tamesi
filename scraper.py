@@ -7,7 +7,6 @@ and generates a simple HTML table page.
 
 import os
 import re
-import sys
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -154,6 +153,112 @@ def scrape_hino_library(card_number: str, password: str) -> List[Book]:
     return books
 
 
+def scrape_tama_library(card_number: str, password: str) -> List[Book]:
+    """Scrape checked-out books from Tama City Library OPAC."""
+    base_url = "https://www.library.tama.tokyo.jp"
+    library_name = "多摩市立図書館"
+    session = requests.Session()
+    books = []
+
+    # Step 1: GET login page to get form action with jsessionid
+    login_url = base_url + "/login"
+    resp = session.get(login_url, timeout=15)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Find the login form with userId input
+    login_form = None
+    for f in soup.find_all("form", attrs={"method": "post"}):
+        if f.find("input", attrs={"name": "textUserId"}):
+            login_form = f
+            break
+
+    if not login_form:
+        print("ERROR: Could not find login form on Tama library page")
+        return []
+
+    form_action = login_form.get("action", "")
+    if form_action.startswith("./"):
+        form_action = base_url + "/" + form_action[2:]
+    elif not form_action.startswith("http"):
+        form_action = base_url + "/" + form_action
+
+    # Step 2: POST login credentials
+    login_data = {
+        "textUserId": card_number,
+        "textPassword": password,
+        "buttonLogin": "ログイン",
+    }
+    resp = session.post(
+        form_action,
+        data=login_data,
+        timeout=15,
+        headers={
+            "Referer": login_url,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    title = soup.title.string if soup.title else ""
+    if "ログイン" in title and "マイページ" not in title:
+        print("ERROR: Login failed for Tama library")
+        return []
+
+    # Step 3: Navigate to rental list
+    rental_url = base_url + "/rentallist"
+    resp = session.get(rental_url, timeout=15, headers={"Referer": resp.url})
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Step 4: Parse book items from <section class="infotable"> elements
+    sections = soup.find_all("section", class_="infotable")
+    for section in sections:
+        book = Book(title="", library_name=library_name)
+
+        # Title is in <h3> > <a> > <span>
+        h3 = section.find("h3")
+        if h3:
+            link = h3.find("a")
+            if link:
+                title_text = link.get_text(strip=True)
+                book.title = re.sub(r'\s+', ' ', title_text).strip()
+            else:
+                title_text = h3.get_text(strip=True)
+                # Remove leading number
+                title_text = re.sub(r'^\d+\s*', '', title_text)
+                book.title = re.sub(r'\s+', ' ', title_text).strip()
+
+        # Metadata is in <div class="item"> > <dl> pairs
+        item_div = section.find("div", class_="item")
+        if item_div:
+            dls = item_div.find_all("dl")
+            for dl in dls:
+                dt = dl.find("dt")
+                dd = dl.find("dd")
+                if dt and dd:
+                    label = dt.get_text(strip=True)
+                    value = dd.get_text(strip=True)
+                    if label == "貸出場所":
+                        book.publisher = value  # Use publisher field for branch name
+                    elif label == "貸出日":
+                        book.checkout_date = value
+                    elif label == "返却期限":
+                        book.due_date = value
+
+        # Check if overdue by comparing due date to today
+        if book.due_date:
+            try:
+                due = datetime.strptime(re.sub(r'[年月]', '/', book.due_date).replace('日', ''), "%Y/%m/%d")
+                if due.date() < datetime.now().date():
+                    book.is_overdue = True
+            except ValueError:
+                pass
+
+        if book.title:
+            books.append(book)
+
+    return books
+
+
 def generate_html(all_books: List[Book], output_path: str):
     """Generate a simple HTML page with a table of checked-out books."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -242,25 +347,49 @@ tr:last-child td{border-bottom:none}
 
 
 def main():
-    card_number = "91691816"
-    password = os.environ.get("HINO_LIBRARY_PASSWORD", "hinohin055")
+    all_books = []
 
-    print("Scraping 日野市立図書館...")
-    try:
-        books = scrape_hino_library(card_number, password)
-        print("  Found " + str(len(books)) + " book(s)")
-        for i, b in enumerate(books, 1):
-            overdue_mark = " [延滞]" if b.is_overdue else ""
-            print("  " + str(i) + ". " + b.title + " (" + b.author + ") 返却: " + b.due_date + overdue_mark)
-    except Exception as e:
-        print("  Error: " + str(e))
-        import traceback
-        traceback.print_exc()
-        books = []
+    # Hino City Library
+    hino_card = os.environ.get("HINO_LIBRARY_CARD", "91691816")
+    hino_password = os.environ.get("HINO_LIBRARY_PASSWORD", "")
+    if hino_password:
+        print("Scraping 日野市立図書館...")
+        try:
+            books = scrape_hino_library(hino_card, hino_password)
+            print("  Found " + str(len(books)) + " book(s)")
+            for i, b in enumerate(books, 1):
+                overdue_mark = " [延滞]" if b.is_overdue else ""
+                print("  " + str(i) + ". " + b.title + " (" + b.author + ") 返却: " + b.due_date + overdue_mark)
+            all_books.extend(books)
+        except Exception as e:
+            print("  Error: " + str(e))
+            import traceback
+            traceback.print_exc()
+    else:
+        print("Skipping 日野市立図書館 (HINO_LIBRARY_PASSWORD not set)")
 
-    output_path = "/home/ubuntu/library-scraper/checkout_list.html"
-    generate_html(books, output_path)
-    print("\nTotal books: " + str(len(books)))
+    # Tama City Library
+    tama_card = os.environ.get("TAMA_LIBRARY_CARD", "50211227")
+    tama_password = os.environ.get("TAMA_LIBRARY_PASSWORD", "")
+    if tama_password:
+        print("\nScraping 多摩市立図書館...")
+        try:
+            books = scrape_tama_library(tama_card, tama_password)
+            print("  Found " + str(len(books)) + " book(s)")
+            for i, b in enumerate(books, 1):
+                overdue_mark = " [延滞]" if b.is_overdue else ""
+                print("  " + str(i) + ". " + b.title + " 返却: " + b.due_date + overdue_mark)
+            all_books.extend(books)
+        except Exception as e:
+            print("  Error: " + str(e))
+            import traceback
+            traceback.print_exc()
+    else:
+        print("Skipping 多摩市立図書館 (TAMA_LIBRARY_PASSWORD not set)")
+
+    output_path = os.environ.get("OUTPUT_PATH", "checkout_list.html")
+    generate_html(all_books, output_path)
+    print("\nTotal books: " + str(len(all_books)))
 
 
 if __name__ == "__main__":
