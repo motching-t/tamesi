@@ -117,7 +117,7 @@ def scrape_hino_library(card_number: str, password: str) -> List[Book]:
     book_list = soup.find("ol", class_="list-book")
     if not book_list:
         print("WARNING: Could not find book list on page")
-        with open("/home/ubuntu/library-scraper/debug_page.html", "w", encoding="utf-8") as f:
+        with open("debug_page.html", "w", encoding="utf-8") as f:
             f.write(resp.text)
         return []
 
