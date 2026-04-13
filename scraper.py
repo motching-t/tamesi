@@ -351,7 +351,7 @@ def main():
 
     # Hino City Library
     hino_card = os.environ.get("HINO_LIBRARY_CARD", "91691816")
-    hino_password = os.environ.get("HINO_LIBRARY_PASSWORD", "")
+    hino_password = os.environ.get("HINO_LIBRARY_PASSWORD", "hinohin0123")
     if hino_password:
         print("Scraping 日野市立図書館...")
         try:
