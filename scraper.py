@@ -54,8 +54,8 @@ def parse_book_item(item, library_name: str) -> Optional[Book]:
 
         if len(paragraphs) >= 2:
             date_text = paragraphs[1].get_text(strip=True)
-            checkout_match = re.search(r'貸出日[：:]?\s*([\d.]+)', date_text)
-            due_match = re.search(r'返却予定日[：:]?\s*([\d.]+)', date_text)
+            checkout_match = re.search(r'貸出日[：:]?\s*([\d./]+)', date_text)
+            due_match = re.search(r'返却予定日[：:]?\s*([\d./]+)', date_text)
             if checkout_match:
                 book.checkout_date = checkout_match.group(1)
             if due_match:
@@ -66,10 +66,8 @@ def parse_book_item(item, library_name: str) -> Optional[Book]:
     return None
 
 
-def scrape_hino_library(card_number: str, password: str) -> List[Book]:
-    """Scrape checked-out books from Hino City Library OPAC."""
-    base_url = "https://www.lib.city.hino.lg.jp"
-    library_name = "日野市立図書館"
+def scrape_winj_library(base_url: str, library_name: str, card_number: str, password: str) -> List[Book]:
+    """Scrape checked-out books from a winj/opac-based library OPAC."""
     session = requests.Session()
     books = []
 
@@ -349,6 +347,7 @@ tr:last-child td{border-bottom:none}
 def main():
     all_books = []
 
+<<<<<<< HEAD
     # Hino City Library
     hino_card = os.environ.get("HINO_LIBRARY_CARD", "91691816")
     hino_password = os.environ.get("HINO_LIBRARY_PASSWORD", "hinohin0123")
@@ -367,25 +366,39 @@ def main():
             traceback.print_exc()
     else:
         print("Skipping 日野市立図書館 (HINO_LIBRARY_PASSWORD not set)")
+=======
+    # Library configurations: (env_prefix, library_name, base_url, scrape_function)
+    libraries = [
+        ("HINO", "日野市立図書館", "https://www.lib.city.hino.lg.jp", "winj"),
+        ("INAGI", "稲城市立図書館", "https://www1.library.inagi.tokyo.jp", "winj"),
+        ("TAMA", "多摩市立図書館", None, "tama"),
+    ]
+>>>>>>> d468bfefa34adb2c83dedf1eb76c6c94a14e6b39
 
-    # Tama City Library
-    tama_card = os.environ.get("TAMA_LIBRARY_CARD", "50211227")
-    tama_password = os.environ.get("TAMA_LIBRARY_PASSWORD", "")
-    if tama_password:
-        print("\nScraping 多摩市立図書館...")
+    for prefix, lib_name, lib_url, lib_type in libraries:
+        card = os.environ.get(prefix + "_LIBRARY_CARD", "")
+        pw = os.environ.get(prefix + "_LIBRARY_PASSWORD", "")
+        if not pw:
+            print("Skipping " + lib_name + " (" + prefix + "_LIBRARY_PASSWORD not set)")
+            continue
+        print("\nScraping " + lib_name + "...")
         try:
-            books = scrape_tama_library(tama_card, tama_password)
+            if lib_type == "winj":
+                books = scrape_winj_library(lib_url, lib_name, card, pw)
+            elif lib_type == "tama":
+                books = scrape_tama_library(card, pw)
+            else:
+                books = []
             print("  Found " + str(len(books)) + " book(s)")
             for i, b in enumerate(books, 1):
                 overdue_mark = " [延滞]" if b.is_overdue else ""
-                print("  " + str(i) + ". " + b.title + " 返却: " + b.due_date + overdue_mark)
+                author_part = " (" + b.author + ")" if b.author else ""
+                print("  " + str(i) + ". " + b.title + author_part + " 返却: " + b.due_date + overdue_mark)
             all_books.extend(books)
         except Exception as e:
             print("  Error: " + str(e))
             import traceback
             traceback.print_exc()
-    else:
-        print("Skipping 多摩市立図書館 (TAMA_LIBRARY_PASSWORD not set)")
 
     output_path = os.environ.get("OUTPUT_PATH", "checkout_list.html")
     generate_html(all_books, output_path)
